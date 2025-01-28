@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -17,6 +18,8 @@ type Client interface {
 	ListenEvents(ctx context.Context) error
 	FetchMessages(ctx context.Context, channelID string, from, to time.Time) ([]slack.Message, error)
 	OpenViewContext(ctx context.Context, triggerID string, view slack.ModalViewRequest) (*slack.ViewResponse, error)
+	PostEphemeralContext(ctx context.Context, channel, user string, options ...slack.MsgOption) (string, error)
+	FetchReactions(ctx context.Context, channelID, timestamp string) ([]slack.ItemReaction, error)
 }
 
 // Client wraps the Slack API and socket mode client.
@@ -146,6 +149,7 @@ func (s *SlackClient) dispatchInteractiveHandlers() {
 }
 
 func (s *SlackClient) FetchMessages(ctx context.Context, channelID string, from, to time.Time) ([]slack.Message, error) {
+	log.Printf("Fetching messages from %s between %s and %s", channelID, from, to)
 	var allMessages []slack.Message
 	cursor := ""
 	for {
@@ -153,8 +157,8 @@ func (s *SlackClient) FetchMessages(ctx context.Context, channelID string, from,
 			ctx,
 			&slack.GetConversationHistoryParameters{
 				ChannelID: channelID,
-				Oldest:    from.String(),
-				Latest:    to.String(),
+				Oldest:    fmt.Sprintf("%f", float64(from.Unix())),
+				Latest:    fmt.Sprintf("%f", float64(to.Unix())),
 				Cursor:    cursor,
 			},
 		)
@@ -173,4 +177,19 @@ func (s *SlackClient) FetchMessages(ctx context.Context, channelID string, from,
 
 func (s *SlackClient) OpenViewContext(ctx context.Context, triggerID string, view slack.ModalViewRequest) (*slack.ViewResponse, error) {
 	return s.api.OpenViewContext(ctx, triggerID, view)
+}
+
+func (s *SlackClient) PostEphemeralContext(ctx context.Context, channel, user string, options ...slack.MsgOption) (string, error) {
+	return s.api.PostEphemeralContext(ctx, channel, user, options...)
+}
+
+func (s *SlackClient) FetchReactions(ctx context.Context, channelID, timestamp string) ([]slack.ItemReaction, error) {
+	reactions, err := s.api.GetReactionsContext(ctx, slack.ItemRef{
+		Channel:   channelID,
+		Timestamp: timestamp,
+	}, slack.GetReactionsParameters{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch reactions: %w", err)
+	}
+	return reactions, nil
 }

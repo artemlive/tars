@@ -13,12 +13,18 @@ type Config struct {
 	Bot struct {
 		LogLevel string `mapstructure:"log_level"`
 	} `mapstructure:"bot"`
+	Database struct {
+		Driver string `mapstructure:"driver"`
+		DSN    string `mapstructure:"dsn"`
+	} `mapstructure:"db"`
 	Channels []ChannelConfig `mapstructure:"channels"`
 }
 
 type ChannelConfig struct {
-	Name  string       `mapstructure:"name"`
-	Rules []RuleConfig `mapstructure:"rules"`
+	Name           string       `mapstructure:"name"`
+	Rules          []RuleConfig `mapstructure:"rules"`
+	BeaconReaction string       `mapstructure:"beacon_reaction"`
+	ID             string       `mapstructure:"id"`
 }
 
 type RuleConfig struct {
