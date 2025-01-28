@@ -37,7 +37,7 @@ func NewBot(ctx context.Context, client slackx.Client, dbRepo storage.StatsRepos
 
 	client.RegisterInteractiveHandler(slack.InteractionTypeShortcut, "pull_stats_for_interval", bot.handleInteractiveEvent)
 	client.RegisterInteractiveHandler(slack.InteractionTypeViewSubmission, "pull_stats_for_interval_modal", bot.handleInteractiveEvent)
-	bot.loadRulesCache()
+	config.BuildReactionCache()
 	return bot, nil
 }
 
@@ -163,6 +163,16 @@ func (b *Bot) handlePullStatsForInterval(callback slack.InteractionCallback) err
 	if channelID == "" {
 		return fmt.Errorf("channel is required")
 	}
+
+	if !b.channelConfigExists(channelID) {
+		// TODO: no hardcode actual user-friendly message
+		errPost := b.postDM(callback.User.ID, "Sorry, this channel is not configured for stats exporting")
+		if errPost != nil {
+			log.Printf("Failed to send DM: %v", errPost)
+		}
+		return fmt.Errorf("channel %s is not configured", channelID)
+	}
+
 	// Extract the selected start date
 	startDateString := callback.View.State.Values["start_date"]["start_date_picker"].SelectedDate
 	startDate, err := time.Parse("2006-01-02", startDateString)
@@ -202,6 +212,23 @@ func (b *Bot) handlePullStatsForInterval(callback slack.InteractionCallback) err
 	return nil
 }
 
+func (b *Bot) channelConfigExists(channelID string) bool {
+	for _, channel := range b.config.Channels {
+		if channel.ID == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) postDM(userID, message string) error {
+	_, _, err := b.slackClient.PostMessageContext(b.ctx, userID, slack.MsgOptionText(message, false))
+	if err != nil {
+		return fmt.Errorf("failed to send DM: %v", err)
+	}
+	return nil
+}
+
 func (b *Bot) postEphemeralError(channelID, userID, message string) error {
 	errMessage := slack.MsgOptionText(fmt.Sprintf(":x: Sorry, I couldn't process your request: %s", message), false)
 	_, err := b.slackClient.PostEphemeralContext(b.ctx, channelID, userID, errMessage)
@@ -212,43 +239,40 @@ func (b *Bot) postEphemeralError(channelID, userID, message string) error {
 }
 
 func (b *Bot) processChannelStats(channelID string, startDate, endDate time.Time) error {
-	// Fetch messages for the channel
+	// Fetch messages
 	messages, err := b.slackClient.FetchMessages(b.ctx, channelID, startDate, endDate)
 	if err != nil {
 		return fmt.Errorf("failed to fetch messages: %w", err)
 	}
 
-	log.Println("Messages fetched successfully")
+	log.Println("Messages fetched successfully", len(messages))
 
-	// Initialize a map to store stats by category
+	// Use StatsProcessor for processing
+	statsProcessor := NewStatsProcessor(b.config)
 	stats := make(map[string]int)
+	beaconReaction := utils.GetControllingReaction(b.config, channelID)
 
-	// Process messages and update stats
 	for _, message := range messages {
-		log.Printf("Processing message: %s", message.Text)
+		log.Printf("Processing message: %s, beacon reaction: %s", message.Text, beaconReaction)
+		if !statsProcessor.ShouldProcessMessage(channelID, message, beaconReaction) {
+			log.Printf("Skipping message: %s", message.Text)
+			continue
+		}
 
-		// Fetch reactions for the message
 		reactions, err := b.slackClient.FetchReactions(b.ctx, channelID, message.Timestamp)
 		if err != nil {
 			log.Printf("Failed to fetch reactions for message %s: %v", message.Timestamp, err)
 			continue
 		}
 
-		// I know that this is a nested loop, but we don't expect a large number of reactions per message
-		// so it should be fine
-		for _, reaction := range reactions {
-			log.Printf("Found reaction: %s (count: %d)", reaction.Name, reaction.Count)
-
-			// Match the reaction to a category
-			category, exists := b.getCategoryForReaction(channelID, reaction.Name)
-			if exists {
-				stats[category] += reaction.Count
-				log.Printf("Matched reaction '%s' to category '%s'", reaction.Name, category)
-			}
-		}
+		statsProcessor.UpdateStats(channelID, reactions, stats)
 	}
 
-	// Save stats to the database
+	return b.saveStatsToDB(channelID, stats)
+}
+
+// Save stats to the database
+func (b *Bot) saveStatsToDB(channelID string, stats map[string]int) error {
 	for category, count := range stats {
 		stat := storage.Stats{
 			Channel:   channelID,
@@ -257,41 +281,11 @@ func (b *Bot) processChannelStats(channelID string, startDate, endDate time.Time
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
+
 		if err := b.repo.SaveStats(b.ctx, &stat); err != nil {
 			return fmt.Errorf("failed to save stats: %w", err)
 		}
 		log.Printf("Saved stats: %+v", stat)
 	}
-	log.Printf("Stats for channel %s: %+v", channelID, stats)
-
 	return nil
-}
-
-func (b *Bot) getControllingReaction(channelID string) string {
-	for _, channel := range b.config.Channels {
-		if channel.ID == channelID {
-			return channel.BeaconReaction
-		}
-	}
-	return ""
-}
-
-func (b *Bot) loadRulesCache() {
-	b.rulesCache = make(map[string]map[string]string)
-	for _, channel := range b.config.Channels {
-		ruleMap := make(map[string]string)
-		for _, rule := range channel.Rules {
-			ruleMap[rule.Reaction] = rule.Category
-		}
-		b.rulesCache[channel.Name] = ruleMap
-	}
-}
-
-func (b *Bot) getCategoryForReaction(channelID, reaction string) (string, bool) {
-	channelRules, exists := b.rulesCache[channelID]
-	if !exists {
-		return "", false
-	}
-	category, exists := channelRules[reaction]
-	return category, exists
 }

@@ -17,7 +17,9 @@ type Config struct {
 		Driver string `mapstructure:"driver"`
 		DSN    string `mapstructure:"dsn"`
 	} `mapstructure:"db"`
-	Channels []ChannelConfig `mapstructure:"channels"`
+	Channels      []ChannelConfig              `mapstructure:"channels"`
+	ReactionCache map[string]map[string]string // channelID -> reaction -> category
+
 }
 
 type ChannelConfig struct {
@@ -46,4 +48,16 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+func (config *Config) BuildReactionCache() {
+	config.ReactionCache = make(map[string]map[string]string)
+
+	for _, channel := range config.Channels {
+		reactionMap := make(map[string]string)
+		for _, rule := range channel.Rules {
+			reactionMap[rule.Reaction] = rule.Category
+		}
+		config.ReactionCache[channel.Name] = reactionMap
+	}
 }

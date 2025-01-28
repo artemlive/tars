@@ -20,6 +20,7 @@ type Client interface {
 	OpenViewContext(ctx context.Context, triggerID string, view slack.ModalViewRequest) (*slack.ViewResponse, error)
 	PostEphemeralContext(ctx context.Context, channel, user string, options ...slack.MsgOption) (string, error)
 	FetchReactions(ctx context.Context, channelID, timestamp string) ([]slack.ItemReaction, error)
+	PostMessageContext(ctx context.Context, channel string, options ...slack.MsgOption) (string, string, error)
 }
 
 // Client wraps the Slack API and socket mode client.
@@ -192,4 +193,8 @@ func (s *SlackClient) FetchReactions(ctx context.Context, channelID, timestamp s
 		return nil, fmt.Errorf("failed to fetch reactions: %w", err)
 	}
 	return reactions, nil
+}
+
+func (s *SlackClient) PostMessageContext(ctx context.Context, channel string, options ...slack.MsgOption) (string, string, error) {
+	return s.api.PostMessageContext(ctx, channel, options...)
 }
