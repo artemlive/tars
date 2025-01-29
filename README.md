@@ -23,6 +23,27 @@ TARS is a Slack bot designed to help track and manage reactions in Slack channel
 - Save stats to a database for future analysis.
 - Fetch and visualize statistics (e.g., pie charts).
 
+### TODO
+
+Here are the planned improvements and enhancements for the project:
+- [ ] **Implement Multiple Log Levels**  
+      Introduce more granular logging options to support different verbosity levels, such as debug, info, warning, and error.
+
+- [ ] **Add More Features**  
+      Introduce new features like JIRA ticket creation.  
+      Add more chart types and interactive handlers. Currently, the bot only supports two shortcuts with a pie chart.
+
+- [ ] **Add More Tests**  
+      Expand the test suite to ensure better code coverage and improve overall reliability.
+
+- [ ] **Support for Additional Storage Backends**  
+      Extend storage compatibility beyond SQLite to include other databases like PostgreSQL or MySQL.
+
+- [ ] **Implement CI/CD Pipeline**  
+      Set up a continuous integration and deployment pipeline to automate testing and deployment processes.
+
+- [ ] **Improve Documentation**
+
 ---
 
 ## Configuration
@@ -117,27 +138,6 @@ channels:
 ---
 
 ## Development
-
-### TODO
-
-Here are the planned improvements and enhancements for the project:
-- [ ] **Implement Multiple Log Levels**  
-      Introduce more granular logging options to support different verbosity levels, such as debug, info, warning, and error.
-
-- [ ] **Add More Features**  
-      Introduce new features like JIRA ticket creation.  
-      Add more chart types and interactive handlers. Currently, the bot only supports two shortcuts with a pie chart.
-
-- [ ] **Add More Tests**  
-      Expand the test suite to ensure better code coverage and improve overall reliability.
-
-- [ ] **Support for Additional Storage Backends**  
-      Extend storage compatibility beyond SQLite to include other databases like PostgreSQL or MySQL.
-
-- [ ] **Implement CI/CD Pipeline**  
-      Set up a continuous integration and deployment pipeline to automate testing and deployment processes.
-
-- [ ] **Improve Documentation**
 
 
 ### Setting Up the Development Environment
