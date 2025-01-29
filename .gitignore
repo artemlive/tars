@@ -1,3 +1,4 @@
-configs/*
-db/*
-coverage/*
+configs/config.yaml
+db/
+coverage/
+bin/
