@@ -1,0 +1,18 @@
+slack:
+  app_token: "xapp"
+  bot_token: "xoxb"
+  signing_secret: ""
+db:
+  dsn: db/tars.db
+  driver: sqlite
+bot:
+  log_level: "info"
+channels:
+  - name: "#support"
+    id: "C089TUGAT9V"
+    rules:
+      - reaction: "cd"
+        category: "CI/CD"
+      - reaction: "bug"
+        category: "Infra bug"
+    beacon_reaction: ":eyes:"

@@ -38,6 +38,15 @@ func LoadConfig(path string) (*Config, error) {
 	viper.SetConfigFile(path)
 	viper.SetConfigType("yaml")
 
+	// Add environment variable support
+	viper.SetEnvPrefix("SLACK") // Prefix all env variables with SLACK_
+	viper.AutomaticEnv()
+
+	// Bind specific environment variables manually
+	_ = viper.BindEnv("slack.app_token", "SLACK_APP_TOKEN")
+	_ = viper.BindEnv("slack.bot_token", "SLACK_BOT_TOKEN")
+	_ = viper.BindEnv("slack.signing_secret", "SLACK_SIGNING_SECRET")
+
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
