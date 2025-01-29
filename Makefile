@@ -4,7 +4,7 @@ GO_FILES := $(shell find . -name '*.go' -not -path "./vendor/*")
 GO_FMT := gofmt -w
 GO_LINT := golangci-lint run
 GO_TEST := go test ./...
-
+GO_TEST_COVER := go tool cover -html cover.out -o cover.html
 # Build the binary
 .PHONY: build
 build:
@@ -30,6 +30,10 @@ lint:
 test:
 	$(GO_TEST)
 
+test-coverage:
+	go test -v ./... -covermode=count -coverpkg=./... -coverprofile coverage/coverage.out
+	go tool cover -html coverage/coverage.out -o coverage/coverage.html
+	open coverage/coverage.html
 # Clean up build artifacts
 .PHONY: clean
 clean:

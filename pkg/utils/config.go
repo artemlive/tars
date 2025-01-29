@@ -58,6 +58,6 @@ func (config *Config) BuildReactionCache() {
 		for _, rule := range channel.Rules {
 			reactionMap[rule.Reaction] = rule.Category
 		}
-		config.ReactionCache[channel.Name] = reactionMap
+		config.ReactionCache[channel.ID] = reactionMap
 	}
 }

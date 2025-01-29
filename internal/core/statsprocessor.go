@@ -1,6 +1,8 @@
 package core
 
 import (
+	"log"
+
 	"github.com/artemlive/tars/pkg/utils"
 	"github.com/slack-go/slack"
 )
@@ -27,6 +29,7 @@ func (sp *StatsProcessor) ShouldProcessMessage(channelID string, message slack.M
 
 func (sp *StatsProcessor) UpdateStats(channelID string, reactions []slack.ItemReaction, stats map[string]int) {
 	for _, reaction := range reactions {
+		log.Printf("Processing reaction: %s", reaction.Name)
 		category, exists := utils.GetCategoryForReaction(sp.config, channelID, reaction.Name)
 		if exists {
 			stats[category] += reaction.Count

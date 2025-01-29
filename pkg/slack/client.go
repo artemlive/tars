@@ -21,6 +21,8 @@ type Client interface {
 	PostEphemeralContext(ctx context.Context, channel, user string, options ...slack.MsgOption) (string, error)
 	FetchReactions(ctx context.Context, channelID, timestamp string) ([]slack.ItemReaction, error)
 	PostMessageContext(ctx context.Context, channel string, options ...slack.MsgOption) (string, string, error)
+	UploadFileV2Context(ctx context.Context, params slack.UploadFileV2Parameters) (*slack.FileSummary, error)
+	OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
 }
 
 // Client wraps the Slack API and socket mode client.
@@ -197,4 +199,12 @@ func (s *SlackClient) FetchReactions(ctx context.Context, channelID, timestamp s
 
 func (s *SlackClient) PostMessageContext(ctx context.Context, channel string, options ...slack.MsgOption) (string, string, error) {
 	return s.api.PostMessageContext(ctx, channel, options...)
+}
+
+func (s *SlackClient) UploadFileV2Context(ctx context.Context, params slack.UploadFileV2Parameters) (*slack.FileSummary, error) {
+	return s.api.UploadFileV2Context(ctx, params)
+}
+
+func (s *SlackClient) OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
+	return s.api.OpenConversationContext(ctx, params)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	slackx "github.com/artemlive/tars/pkg/slack"
@@ -11,6 +13,7 @@ import (
 	"github.com/artemlive/tars/pkg/utils"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
+	charts "github.com/vicanso/go-charts/v2"
 )
 
 // Bot represents the TARS bot.
@@ -19,8 +22,6 @@ type Bot struct {
 	config      *utils.Config
 	ctx         context.Context
 	repo        storage.StatsRepository
-	rulesCache  map[string]map[string]string // Channel ID -> Reaction -> Category
-
 }
 
 // NewBot initializes the bot with its dependencies.
@@ -36,8 +37,11 @@ func NewBot(ctx context.Context, client slackx.Client, dbRepo storage.StatsRepos
 	client.RegisterEventHandler("reaction_added", bot.handleReactionEvent)
 
 	client.RegisterInteractiveHandler(slack.InteractionTypeShortcut, "pull_stats_for_interval", bot.handleInteractiveEvent)
+	client.RegisterInteractiveHandler(slack.InteractionTypeShortcut, "draw_stats_for_interval", bot.handleInteractiveEvent)
 	client.RegisterInteractiveHandler(slack.InteractionTypeViewSubmission, "pull_stats_for_interval_modal", bot.handleInteractiveEvent)
-	config.BuildReactionCache()
+	client.RegisterInteractiveHandler(slack.InteractionTypeViewSubmission, "draw_stats_for_interval_modal", bot.handleInteractiveEvent)
+
+	bot.config.BuildReactionCache()
 	return bot, nil
 }
 
@@ -47,42 +51,36 @@ func (b *Bot) Run() error {
 	return b.slackClient.ListenEvents(b.ctx)
 }
 
-// Handle interactive events
 func (b *Bot) handleInteractiveEvent(eventType slack.InteractionType, callback slack.InteractionCallback) error {
-	log.Printf("Interactive Event at client: %+v", eventType)
-	switch eventType {
-	case slack.InteractionTypeShortcut:
+	log.Printf("Interactive Event: %s", eventType)
+	if eventType == slack.InteractionTypeShortcut {
 		return b.handleInteractiveShortcut(callback)
-	case slack.InteractionTypeViewSubmission:
-		return b.handelInteractiveViewSubmission(callback)
-	default:
-		log.Println("Unsupported interactive event type")
+	} else if eventType == slack.InteractionTypeViewSubmission {
+		return b.handleViewSubmission(callback)
 	}
+	log.Println("Unsupported interactive event type")
 	return nil
 }
 
-// Handle interactive view submissions
-func (b *Bot) handelInteractiveViewSubmission(callback slack.InteractionCallback) error {
-	log.Printf("Interactive View Submission: %+v", callback)
-
+func (b *Bot) handleViewSubmission(callback slack.InteractionCallback) error {
 	switch callback.View.CallbackID {
-	case "pull_stats_for_interval_modal":
+	case "pull_stats_for_interval_modal", "draw_stats_for_interval_modal":
 		return b.handlePullStatsForInterval(callback)
 	default:
+		log.Printf("Unhandled view submission callback: %s", callback.View.CallbackID)
 		return nil
 	}
 }
-
 func (b *Bot) handleInteractiveShortcut(callback slack.InteractionCallback) error {
 	switch callback.CallbackID {
-	case "pull_stats_for_interval":
-		return b.openDatePickerModal(callback.TriggerID)
+	case "pull_stats_for_interval", "draw_stats_for_interval":
+		return b.openDatePickerModal(callback.CallbackID, callback.TriggerID)
 	default:
 		return nil
 	}
 }
 
-func (b *Bot) openDatePickerModal(triggerID string) error {
+func (b *Bot) openDatePickerModal(modalType, triggerID string) error {
 	curDate := time.Now().Format("2006-01-02")
 
 	startDate := slack.NewDatePickerBlockElement("start_date_picker")
@@ -93,10 +91,10 @@ func (b *Bot) openDatePickerModal(triggerID string) error {
 
 	modal := slack.ModalViewRequest{
 		Type:       slack.VTModal,
-		CallbackID: "pull_stats_for_interval_modal",
+		CallbackID: fmt.Sprintf("%s_modal", modalType),
 		Title: &slack.TextBlockObject{
 			Type: slack.PlainTextType,
-			Text: "Pull Stats for Interval📊",
+			Text: "Stats for Interval📊",
 		},
 		Blocks: slack.Blocks{
 			BlockSet: []slack.Block{
@@ -188,28 +186,19 @@ func (b *Bot) handlePullStatsForInterval(callback slack.InteractionCallback) err
 	}
 	endDate = time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 23, 59, 59, 0, time.UTC)
 
-	err = b.processChannelStats(channelID, startDate, endDate)
-	if err != nil {
-		errPost := b.postEphemeralError(channelID, callback.User.ID, err.Error())
-		if errPost != nil {
-			log.Printf("Failed to send error message: %v", errPost)
+	if callback.View.CallbackID == "pull_stats_for_interval_modal" {
+		err = b.processChannelStats(channelID, startDate, endDate)
+		if err != nil {
+			errPost := b.postEphemeralError(channelID, callback.User.ID, err.Error())
+			if errPost != nil {
+				log.Printf("Failed to send error message: %v", errPost)
+			}
+			return err // return the original error
 		}
-		return err // return the original error
 	}
 
-	userID := callback.User.ID
-	stats, err := b.repo.GetStats(channelID, startDate, endDate)
-	if err != nil {
-		log.Printf("Error fetching stats: %v", err)
-		errPost := b.postEphemeralError(channelID, userID, err.Error())
-		if errPost != nil {
-			log.Printf("Failed to send error message: %v", err)
-		}
-		return err
-	}
-
-	log.Printf("Stats: %+v", stats)
-	return nil
+	err = b.GenerateAndSendStatsPieChart(b.ctx, channelID, startDate, endDate, callback.User.ID)
+	return err
 }
 
 func (b *Bot) channelConfigExists(channelID string) bool {
@@ -239,23 +228,26 @@ func (b *Bot) postEphemeralError(channelID, userID, message string) error {
 }
 
 func (b *Bot) processChannelStats(channelID string, startDate, endDate time.Time) error {
-	// Fetch messages
-	messages, err := b.slackClient.FetchMessages(b.ctx, channelID, startDate, endDate)
+	// Fetch messages for the entire range in one go
+	messages, err := b.slackClient.FetchMessages(b.ctx, channelID, startDate, endDate.Add(24*time.Hour))
 	if err != nil {
 		return fmt.Errorf("failed to fetch messages: %w", err)
 	}
-
-	log.Println("Messages fetched successfully", len(messages))
-
-	// Use StatsProcessor for processing
 	statsProcessor := NewStatsProcessor(b.config)
-	stats := make(map[string]int)
 	beaconReaction := utils.GetControllingReaction(b.config, channelID)
+	log.Printf("Fetched %d messages for range %s to %s", len(messages), startDate, endDate)
 
+	// Organize stats by day
+	statsByDay := make(map[string]map[string]int) // date -> category -> count
 	for _, message := range messages {
-		log.Printf("Processing message: %s, beacon reaction: %s", message.Text, beaconReaction)
+		timestampFloat, err := strconv.ParseFloat(message.Timestamp, 64)
+		if err != nil {
+			log.Printf("Invalid timestamp for message: %s, error: %v", message.Timestamp, err)
+			continue
+		}
+		msgDate := time.Unix(int64(timestampFloat), 0).Format("2006-01-02")
+		log.Printf("Message Date: %s", msgDate)
 		if !statsProcessor.ShouldProcessMessage(channelID, message, beaconReaction) {
-			log.Printf("Skipping message: %s", message.Text)
 			continue
 		}
 
@@ -265,27 +257,137 @@ func (b *Bot) processChannelStats(channelID string, startDate, endDate time.Time
 			continue
 		}
 
-		statsProcessor.UpdateStats(channelID, reactions, stats)
+		if _, exists := statsByDay[msgDate]; !exists {
+			statsByDay[msgDate] = make(map[string]int)
+		}
+		statsProcessor.UpdateStats(channelID, reactions, statsByDay[msgDate])
 	}
 
-	return b.saveStatsToDB(channelID, stats)
-}
-
-// Save stats to the database
-func (b *Bot) saveStatsToDB(channelID string, stats map[string]int) error {
-	for category, count := range stats {
-		stat := storage.Stats{
-			Channel:   channelID,
-			Category:  category,
-			Count:     count,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+	// Save stats for each day
+	for day, stats := range statsByDay {
+		date, _ := time.Parse("2006-01-02", day)
+		if err := b.saveStatsToDB(channelID, date, stats); err != nil {
+			log.Printf("Failed to save stats for %s: %v", day, err)
 		}
-
-		if err := b.repo.SaveStats(b.ctx, &stat); err != nil {
-			return fmt.Errorf("failed to save stats: %w", err)
-		}
-		log.Printf("Saved stats: %+v", stat)
 	}
 	return nil
+}
+
+func (b *Bot) saveStatsToDB(channelID string, date time.Time, stats map[string]int) error {
+	return b.repo.SaveStats(channelID, date, stats)
+}
+
+func (b *Bot) GenerateAndSendStatsPieChart(ctx context.Context, channelID string, startDate, endDate time.Time, userID string) error {
+	// Fetch stats from DB
+	stats, err := b.repo.GetAggregatedStats(channelID, startDate, endDate)
+	if err != nil {
+		return fmt.Errorf("failed to fetch stats: %w", err)
+	}
+
+	// Check if stats are empty
+	if len(stats) == 0 {
+		_, _, err := b.slackClient.PostMessageContext(ctx, userID, slack.MsgOptionText("📉 No stats available for this period.", false))
+		return err
+	}
+
+	// Aggregate stats by category
+	names := []string{}
+	values := []float64{}
+	for _, stat := range stats {
+		names = append(names, stat.Category)
+		values = append(values, float64(stat.Count))
+	}
+
+	p, err := charts.PieRender(
+		values,
+		charts.TitleOptionFunc(charts.TitleOption{
+			Text:    "Reaction Stats Pie Chart",
+			Subtext: fmt.Sprintf("From %s to %s", startDate.Format("2006-01-02"), endDate.Format("2006-01-02")),
+			Left:    charts.PositionCenter,
+		}),
+		charts.PaddingOptionFunc(charts.Box{
+			Top:    20,
+			Right:  20,
+			Bottom: 20,
+			Left:   20,
+		}),
+		charts.LegendOptionFunc(charts.LegendOption{
+			Theme:  charts.NewTheme(charts.ThemeLight),
+			Orient: charts.OrientVertical,
+			Data:   names,
+			Left:   charts.PositionRight,
+		}),
+		charts.ThemeOptionFunc(charts.ThemeDark),
+		PieSeriesShowLabel(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to render chart: %w", err)
+	}
+
+	// Save the chart as an image
+	filePath := "/tmp/stats_pie_chart.png"
+	buf, err := p.Bytes()
+	if err != nil {
+		return fmt.Errorf("failed to generate chart bytes: %w", err)
+	}
+	err = os.WriteFile(filePath, buf, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to save chart to file: %w", err)
+	}
+
+	// Upload to Slack
+	err = b.uploadGraphToSlack(userID, filePath, "📊 Reaction Stats Pie Chart")
+	if err != nil {
+		return fmt.Errorf("failed to upload chart: %w", err)
+	}
+	os.Remove(filePath)
+
+	return nil
+}
+
+func (b *Bot) uploadGraphToSlack(userID string, filePath string, title string) error {
+	log.Printf("Channel ID: %s", userID)
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+	fs, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to get file stats: %w", err)
+	}
+
+	// Open a direct message (DM) with the user
+	conversation, _, _, err := b.slackClient.OpenConversationContext(b.ctx, &slack.OpenConversationParameters{
+		Users: []string{userID}, // Open DM with the user
+	})
+	if err != nil {
+		return fmt.Errorf("failed to open DM with user %s: %w", userID, err)
+	}
+	// Upload file to Slack
+	params := slack.UploadFileV2Parameters{
+		Channel:  conversation.ID,
+		Reader:   file,
+		File:     file.Name(),
+		Filename: file.Name(),
+		Title:    title,
+		FileSize: int(fs.Size()),
+	}
+
+	_, err = b.slackClient.UploadFileV2Context(b.ctx, params)
+	if err != nil {
+		return fmt.Errorf("failed to upload file: %w", err)
+	}
+
+	log.Printf("Successfully uploaded %s to Slack", title)
+	return nil
+}
+
+func PieSeriesShowLabel() charts.OptionFunc {
+	return func(opt *charts.ChartOption) {
+		for index := range opt.SeriesList {
+			opt.SeriesList[index].Label.Show = true
+			opt.SeriesList[index].Label.Formatter = "{b}: {c} ({d})"
+		}
+	}
 }

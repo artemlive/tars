@@ -1,12 +1,22 @@
 package storage
 
 import (
-	"context"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// StatsQuery defines query parameters for fetching stats
+type StatsQuery struct {
+	Channel string
+	Start   time.Time
+	End     time.Time
+	GroupBy []string // Defines what fields to group by (category, date, etc.)
+}
 
 // SQLiteStatsRepository is the SQLite implementation of StatsRepository
 type SQLiteStatsRepository struct {
@@ -18,35 +28,73 @@ func NewSQLiteStatsRepository(db *gorm.DB) *SQLiteStatsRepository {
 	return &SQLiteStatsRepository{DB: db}
 }
 
-// IncrementReaction increments the count for a reaction in a channel
-func (r *SQLiteStatsRepository) IncrementReaction(channel, category, reaction string) error {
-	var stats Stats
-	err := r.DB.Where("channel = ? AND category = ? AND reaction = ?", channel, category, reaction).
-		First(&stats).Error
+func (r *SQLiteStatsRepository) GetAggregatedStats(channel string, start, end time.Time) ([]Stats, error) {
+	query := StatsQuery{
+		Channel: channel,
+		Start:   start,
+		End:     end,
+		GroupBy: []string{"category"},
+	}
+	return r.getStats(query)
+}
 
-	if err == gorm.ErrRecordNotFound {
-		stats = Stats{Channel: channel, Category: category, Reaction: reaction, Count: 1}
-		return r.DB.Create(&stats).Error
+func (r *SQLiteStatsRepository) getStats(query StatsQuery) ([]Stats, error) {
+	var results []Stats
+	db := r.DB
+
+	// Base selection
+	db = db.Select("SUM(count) as count")
+
+	// Append group fields dynamically
+	if len(query.GroupBy) > 0 {
+		groupClause := strings.Join(query.GroupBy, ", ")
+		db = db.Select(groupClause + ", SUM(count) as count").Group(groupClause)
 	}
 
+	// Apply filters
+	db = db.Where("channel = ? AND date BETWEEN ? AND ?", query.Channel, query.Start, query.End)
+
+	// Execute query
+	err := db.Find(&results).Error
 	if err != nil {
-		return err
+		log.Printf("❌ Failed to fetch stats: %v", err)
 	}
-
-	stats.Count++
-	return r.DB.Save(&stats).Error
+	return results, err
 }
 
-// GetStats retrieves all stats for a specific channel
-func (r *SQLiteStatsRepository) GetStats(channel string, start, end time.Time) ([]Stats, error) {
-	var stats []Stats
-	err := r.DB.Where("channel = ?", channel).Find(&stats).Error
-	return stats, err
+func (r *SQLiteStatsRepository) GetDailyStats(channel string, start, end time.Time) ([]Stats, error) {
+	query := StatsQuery{
+		Channel: channel,
+		Start:   start,
+		End:     end,
+		GroupBy: []string{"date", "category"},
+	}
+	return r.getStats(query)
 }
 
-func (r *SQLiteStatsRepository) SaveStats(ctx context.Context, stat *Stats) error {
-	if err := r.DB.WithContext(ctx).Create(stat).Error; err != nil {
-		return fmt.Errorf("failed to save stat: %w", err)
+func (r *SQLiteStatsRepository) SaveStats(channelID string, date time.Time, stats map[string]int) error {
+	tx := r.DB.Begin()
+
+	for category, count := range stats {
+		stat := Stats{
+			Channel:   channelID,
+			Category:  category,
+			Count:     count,
+			Date:      date,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+
+		err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "channel"}, {Name: "category"}, {Name: "date"}},
+			DoUpdates: clause.AssignmentColumns([]string{"count", "updated_at"}),
+		}).Create(&stat).Error
+
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to save stats: %w", err)
+		}
 	}
-	return nil
+
+	return tx.Commit().Error
 }

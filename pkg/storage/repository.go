@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"time"
@@ -9,9 +8,9 @@ import (
 
 // StatsRepository defines methods for interacting with stats storage
 type StatsRepository interface {
-	IncrementReaction(channel, category, reaction string) error
-	GetStats(channel string, start, end time.Time) ([]Stats, error)
-	SaveStats(ctx context.Context, stat *Stats) error
+	SaveStats(channelID string, date time.Time, stats map[string]int) error
+	GetAggregatedStats(channel string, start, end time.Time) ([]Stats, error)
+	GetDailyStats(channel string, start, end time.Time) ([]Stats, error)
 }
 
 // NewRepository initializes the database and returns a StatsRepository.
