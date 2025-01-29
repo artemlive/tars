@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
 
@@ -14,14 +14,10 @@ import (
 )
 
 func main() {
-	// Load configuration
-	configPath := "configs/config.yaml"
-	if envPath := os.Getenv("CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
+	configPath := flag.String("config", "configs/config.yaml", "Path to the configuration file")
+	flag.Parse()
 
-	config, err := utils.LoadConfig(configPath)
-	log.Printf("config: %+v", config)
+	config, err := utils.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
